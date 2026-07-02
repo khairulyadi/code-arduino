@@ -1,0 +1,203 @@
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ====================
+// WIFI & FIREBASE
+// ====================
+#define WIFI_SSID "vivo123"
+#define WIFI_PASSWORD "12345678"
+
+#define API_KEY "AIzaSyCbixkglppDxkhCKRfjaP3-o1BbHLW64To"
+#define DATABASE_URL "https://monitoring-ketinggian-ai-3a9f9-default-rtdb.asia-southeast1.firebasedatabase.app/"
+
+#define USER_EMAIL "esp32@monitoringair.com"
+#define USER_PASSWORD "12345678"
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+// ====================
+// SENSOR
+// ====================
+const int trigPin = 18;
+const int echoPin = 5;
+
+// ====================
+// LED
+// ====================
+const int ledHijau = 16;
+const int ledKuning = 17;
+const int ledMerah = 19;
+
+// ====================
+// BUZZER
+// ====================
+const int buzzer = 32;
+
+// Tinggi tangki (cm)
+const int MAX_HEIGHT = 13;
+
+long duration;
+int distance;
+int waterLevel;
+
+unsigned long sendDataPrevMillis = 0;
+
+void setup() {
+  Serial.begin(115200);
+
+  Wire.begin(21, 22);
+
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  pinMode(ledHijau, OUTPUT);
+  pinMode(ledKuning, OUTPUT);
+  pinMode(ledMerah, OUTPUT);
+
+  pinMode(buzzer, OUTPUT);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Tangki Air");
+  delay(2000);
+  lcd.clear();
+
+  // ====================
+  // KONEKSI WIFI
+  // ====================
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting...");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi Connected");
+  Serial.println(WiFi.localIP());
+
+  lcd.clear();
+  lcd.print("WiFi Connected");
+  delay(1000);
+  lcd.clear();
+
+  // ====================
+  // FIREBASE
+  // ====================
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+}
+
+void loop() {
+
+  // ====================
+  // BACA SENSOR
+  // ====================
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+  distance = duration * 0.034 / 2;
+
+  // Hitung tinggi air
+  waterLevel = MAX_HEIGHT - distance;
+
+  if (waterLevel < 0)
+    waterLevel = 0;
+
+  if (waterLevel > MAX_HEIGHT)
+    waterLevel = MAX_HEIGHT;
+
+  // ====================
+  // TAMPILKAN KE LCD
+  // ====================
+  lcd.setCursor(0, 0);
+  lcd.print("Air: ");
+  lcd.print(waterLevel);
+  lcd.print(" cm   ");
+
+  // Reset LED & buzzer
+  digitalWrite(ledHijau, LOW);
+  digitalWrite(ledKuning, LOW);
+  digitalWrite(ledMerah, LOW);
+  noTone(buzzer);
+
+  lcd.setCursor(0, 1);
+
+  // ====================
+  // LOGIKA TANGKI AIR
+  // ====================
+
+  // KOSONG
+  if (waterLevel < 5) {
+    lcd.print("KOSONG      ");
+    digitalWrite(ledHijau, HIGH);
+  }
+
+  // SETENGAH
+  else if (waterLevel < 10) {
+    lcd.print("SETENGAH    ");
+    digitalWrite(ledKuning, HIGH);
+
+    tone(buzzer, 1500);
+    delay(150);
+    noTone(buzzer);
+    delay(150);
+
+    tone(buzzer, 1500);
+    delay(150);
+    noTone(buzzer);
+  }
+
+  // PENUH
+  else {
+    lcd.print("PENUH       ");
+    digitalWrite(ledMerah, HIGH);
+
+    tone(buzzer, 2000);
+    delay(1000);
+    noTone(buzzer);
+  }
+
+  // ====================
+  // KIRIM KE FIREBASE
+  // ====================
+  if (Firebase.ready() &&
+      millis() - sendDataPrevMillis > 3000) {
+
+    sendDataPrevMillis = millis();
+
+    Firebase.setInt(fbdo,
+                    "/WaterLevel/TinggiAir",
+                    waterLevel);
+
+    Firebase.setString(fbdo,
+                       "/WaterLevel/Status",
+                       (waterLevel < 5) ? "KOSONG" :
+                       (waterLevel < 10) ? "SETENGAH" :
+                       "PENUH");
+  }
+
+  delay(300);
+}
